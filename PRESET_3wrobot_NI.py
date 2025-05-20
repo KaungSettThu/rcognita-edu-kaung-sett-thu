@@ -66,9 +66,11 @@ parser.add_argument('--is_print_sim_step', type=int,
 parser.add_argument('--action_manual', type=float,
                     default=[-5, -3], nargs='+',
                     help='Manual control action to be fed constant, system-specific!')
+# adjust this
 parser.add_argument('--Nactor', type=int,
                     default=6,
                     help='Horizon length (in steps) for predictive controllers.')
+
 parser.add_argument('--pred_step_size_multiplier', type=float,
                     default=5.0,
                     help='Size of each prediction step in seconds is a pred_step_size_multiplier multiple of controller sampling time dt.')
