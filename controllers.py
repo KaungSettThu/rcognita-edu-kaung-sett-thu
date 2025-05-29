@@ -354,7 +354,11 @@ class ControllerOptimalPredictive:
             self.dim_critic = int( ( ( self.dim_output + self.dim_input ) + 1 ) * ( self.dim_output + self.dim_input )/2 * 3)
             self.Wmin = np.zeros(self.dim_critic) 
             self.Wmax = np.ones(self.dim_critic) 
-        self.N_CTRL = N_CTRL()
+        
+        
+        # initialize N_CTRL controller with observation targets
+
+        self.N_CTRL = N_CTRL(self.observation_target)
 
     def reset(self,t0):
         """
@@ -545,7 +549,7 @@ class ControllerOptimalPredictive:
             self.action_curr = action
             
             return action    
-    
+        
         else:
             return self.action_curr
 
@@ -555,7 +559,91 @@ class N_CTRL:
         ########################## write down here nominal controller class #################################
         #####################################################################################################
 
-        return [v,w]
+    def __init__(self, observation_target):
+        self.observation_target = observation_target;
+    
+        # set goal states
+
+        self.x_goal = observation_target[0]
+        self.y_goal = observation_target[1]
+        self.theta_goal = observation_target[2]
+
+        # set control gains
+
+        self.krho = 0.5
+        self.kalpha = 1.5
+        self.kbeta = -0.6
+
+
+    def wrap_angle(self, theta):
+        """
+        Wrap angle to the range [-pi, pi].
+        """
+
+        while theta <= -math.pi:
+            theta += 2 * math.pi
+        while theta > math.pi:
+            theta -= 2 * math.pi
+        return theta
+        
+
+    def compute_error(self, observation):
+        """
+        Compute the error between the current observation and the target observation.
+        """
+
+        x = observation[0]
+        y = observation[1]
+        theta = observation[2]
+
+        dx = self.x_goal - x
+        dy = self.y_goal - y
+        dtheta = self.wrap_angle(self.theta_goal - theta)
+
+        # compute the distance to the goal
+
+        rho = math.sqrt(dx**2 + dy**2)
+
+        # compute the angle to the goal
+
+        alpha = self.wrap_angle(math.atan2(dy, dx) - theta)
+
+        # compute the angle to the goal in the robot's frame
+
+        beta = self.wrap_angle(dtheta - alpha)
+
+        return rho, alpha, beta
+    
+        
+    def compute_control(self, observation):
+        """
+        Compute the control action based on the error values.
+        """
+
+        rho, alpha, beta = self.compute_error(observation)
+
+        # compute the linear velocity and angular velocity
+        # control gains are set in the constructor
+
+        v = self.krho * rho
+        w = self.kalpha * alpha + self.kbeta * beta
+
+        return v, w
+
+
+    def pure_loop(self, observation):
+
+        v, w = self.compute_control(observation)
+
+        return np.array([v, w])
+
+
+# class LQR:
+
+
+
+# class MPC:
+
 
 
 
