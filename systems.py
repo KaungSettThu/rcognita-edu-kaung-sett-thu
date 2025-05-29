@@ -252,6 +252,7 @@ class System:
         
         return rhs_full_state    
     
+
 class Sys3WRobotNI(System):
     """
     System class: 3-wheel robot with static actuators (the NI - non-holonomic integrator).
@@ -270,15 +271,17 @@ class Sys3WRobotNI(System):
             self.tau_disturb = self.pars_disturb[2]
     
     def _state_dyn(self, t, state, action, disturb=[]):   
-        Dstate = np.zeros(self.dim_state)
-        
 
         #####################################################################################################
         ############################# write down here math model of robot ###################################
         #####################################################################################################    
         
+        dx = action[0] * np.cos(state[2])
+        dy = action[0] * np.sin(state[2])
+        dtheta = action[1]
+
              
-        return Dstate    
+        return np.array(dx, dy, dtheta)  
  
     def _disturb_dyn(self, t, disturb):
         """
@@ -295,5 +298,6 @@ class Sys3WRobotNI(System):
     def out(self, state, action=[]):
         observation = np.zeros(self.dim_output)
         observation = state
+        print(f"Observation {observation}") # logging the observation
         return observation
 
