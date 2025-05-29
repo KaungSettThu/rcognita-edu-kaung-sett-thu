@@ -132,6 +132,19 @@ parser.add_argument('--init_robot_pose_y', type=float,
 parser.add_argument('--init_robot_pose_theta', type=float,
                     default=1.57,
                     help='Initial orientation angle (in radians) of the robot pose.')
+
+# adding goal coordinates
+
+parser.add_argument('--goal_robot_pose_x', type=float,
+                    default=0.0,
+                    help='Goal x-coordiante of the robot pose.')
+parser.add_argument('--goal_robot_pose_y', type=float,
+                    default=0.0,
+                    help='Goal y-coordiante of the robot pose.')
+parser.add_argument('--goal_robot_pose_theta', type=float,
+                    default=0.0,
+                    help='Goal orientation angle (in radians) of the robot pose.')
+
 parser.add_argument('--distortion_x', type=float,
                     default=-0.6,
                     help='X-coordinate of the center of distortion.')
@@ -164,6 +177,19 @@ while theta < -np.pi:
         theta += 2 * np.pi
 
 state_init = np.array([x, y, theta])
+
+# setting the goal coordinates
+
+x_goal = args.goal_robot_pose_x
+y_goal = args.goal_robot_pose_y
+theta_goal = args.goal_robot_pose_theta
+
+while theta_goal > np.pi:
+        theta_goal -= 2 * np.pi
+while theta_goal < -np.pi:
+        theta_goal += 2 * np.pi
+
+state_goal = np.array([x_goal, y_goal, theta_goal])
 
 args.action_manual = np.array(args.action_manual)
 
@@ -248,9 +274,9 @@ my_ctrl_opt_pred = controllers.ControllerOptimalPredictive(dim_input,
                                            critic_struct = critic_struct,
                                            run_obj_struct = run_obj_struct,
                                            run_obj_pars = [R1],
-                                           observation_target = [],
-                                           state_init=state_init,
-                                           obstacle=[xdistortion_x, ydistortion_y,distortion_sigma],
+                                           observation_target = state_goal,
+                                           state_init = state_init,
+                                           obstacle = [xdistortion_x, ydistortion_y,distortion_sigma],
                                            seed=seed)
 
 
