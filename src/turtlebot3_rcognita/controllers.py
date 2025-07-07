@@ -3,11 +3,12 @@ Contains controllers a.k.a. agents.
 
 """
 
-from utilities import dss_sim
-from utilities import rep_mat
-from utilities import uptria2vec
-from utilities import push_vec
-import models
+from .utilities import dss_sim
+from .utilities import rep_mat
+from .utilities import uptria2vec
+from .utilities import push_vec
+from . import models
+from .systems import Sys3WRobotNI
 import numpy as np
 import scipy as sp
 from numpy.random import rand
@@ -17,6 +18,7 @@ from scipy.optimize import NonlinearConstraint
 from scipy.stats import multivariate_normal
 from numpy.linalg import lstsq
 from numpy import reshape
+from scipy.linalg import solve_discrete_are
 import warnings
 import math
 # For debugging purposes
@@ -38,7 +40,6 @@ def ctrl_selector(t, observation, action_manual, ctrl_nominal, ctrl_benchmarking
         Control action.
 
     """
-    
     if mode=='manual': 
         action = action_manual
     elif mode=='nominal': 
@@ -158,9 +159,11 @@ class ControllerOptimalPredictive:
         
     """       
     def __init__(self,
+                 dim_state,
                  dim_input,
                  dim_output,
                  mode='MPC',
+                 system = None,
                  ctrl_bnds=[],
                  action_init = [],
                  t0=0,
@@ -279,10 +282,15 @@ class ControllerOptimalPredictive:
         np.random.seed(seed)
         print(seed)
 
+        self.dim_state = dim_state
         self.dim_input = dim_input
         self.dim_output = dim_output
         
         self.mode = mode
+
+        # System and Model to be used in LQR
+
+        self.system = system
 
         self.ctrl_clock = t0
         self.sampling_time = sampling_time
@@ -297,6 +305,12 @@ class ControllerOptimalPredictive:
         self.action_sqn_max = rep_mat(self.action_max, 1, Nactor) 
         self.action_sqn_init = []
         self.state_init = []
+
+        # Weight matrixes : common
+        self.R1 = run_obj_pars
+
+        # Terminal cost matrix for MPC
+        self.Q_final = run_obj_pars[:3, :3]
 
         if len(action_init) == 0:
             self.action_curr = self.action_min/10
@@ -355,10 +369,22 @@ class ControllerOptimalPredictive:
             self.Wmin = np.zeros(self.dim_critic) 
             self.Wmax = np.ones(self.dim_critic) 
         
+        # initiate Norminal controller
         
-        # initialize N_CTRL controller with observation targets
+        self.N_CTRL = N_CTRL(self.observation_target,
+                             ctrl_bnds)
 
-        self.N_CTRL = N_CTRL(self.observation_target)
+        # Initiate LQR controller
+
+        self.LQR = LQR(self.dim_state,
+                        self.dim_input,
+                        self.dim_output,
+                        sampling_time = self.sampling_time,
+                        system = self.system,        
+                        run_obj_pars = self.R1,
+                        observation_target = self.observation_target,
+                        state_init = self.state_init,
+                        ctrl_bnds = ctrl_bnds)
 
     def reset(self,t0):
         """
@@ -406,11 +432,41 @@ class ControllerOptimalPredictive:
         
         See class documentation.
         """
-        run_obj = 1
+        # run_obj = 1
         #####################################################################################################
         ################################# write down here cost-function #####################################
         #####################################################################################################
+        
+        # Fix the shape of the matrix
+        observation = np.array(observation)
+        action = np.array(action)
 
+        # Concantenate to get a matrix containing both observation and action
+        z = np.concatenate((observation, action))
+
+        # Cost function
+        run_obj = z.T @ self.R1 @ z
+
+        """
+        Testing the LQR by adding the penalty zone
+        that increases the cost
+        """
+
+        # # Define penalty zones 
+        # penalty_zone_x_min, penalty_zone_x_max = -2.5, -1.5
+        # penalty_zone_y_min, penalty_zone_y_max = -1.5, -0.5
+        # penalty_magnitude = 100.0 # A large value
+
+        # # Get current robot position from observation (assuming observation is [x, y, theta])
+        # robot_x, robot_y = observation[0], observation[1]
+
+        # # Check if robot is within a penalty zone
+        # if (penalty_zone_x_min <= robot_x <= penalty_zone_x_max and
+        #     penalty_zone_y_min <= robot_y <= penalty_zone_y_max):
+        #     run_obj += penalty_magnitude * np.linalg.norm(self.observation_target[:2] - observation[:2])**2 # Add penalty for being in the zone
+
+        """"""
+        
         return run_obj
 
     def _actor_cost(self, action_sqn, observation):
@@ -436,10 +492,18 @@ class ControllerOptimalPredictive:
             
             observation_sqn[k, :] = self.sys_out(state)
         
-        J = 0         
+        J = 0
+
+        # Cost calculation over finite horizon (MPC)        
         if self.mode=='MPC':
             for k in range(self.Nactor):
                 J += self.gamma**k * self.run_obj(observation_sqn[k, :], my_action_sqn[k, :])
+
+        # Terminal cost matrix for MPC
+        self.Q_final = 20 * self.R1[:3, :3]
+
+        final_predicted_state = observation_sqn[self.Nactor - 1, :]
+        J += final_predicted_state.T @ self.Q_final @ final_predicted_state
 
         return J
     
@@ -537,7 +601,9 @@ class ControllerOptimalPredictive:
         if time_in_sample >= self.sampling_time: # New sample
             # Update controller's internal clock
             self.ctrl_clock = t
-            
+            print(self.mode)
+
+
             if self.mode == 'MPC':  
                 
                 action = self._actor_optimizer(observation)
@@ -546,10 +612,14 @@ class ControllerOptimalPredictive:
                 
                 action = self.N_CTRL.pure_loop(observation)
             
+            elif self.mode == "LQR":
+
+                action = self.LQR.pure_loop(observation)
+            
             self.action_curr = action
             
             return action    
-        
+    
         else:
             return self.action_curr
 
@@ -558,92 +628,192 @@ class N_CTRL:
         #####################################################################################################
         ########################## write down here nominal controller class #################################
         #####################################################################################################
+        def __init__(self, observation_target, ctrl_bnds):
+            
+            # set initial states
 
-    def __init__(self, observation_target):
-        self.observation_target = observation_target;
-    
-        # set goal states
+            # self.x = state_init[0]
+            # self.y = state_init[1]
+            # self.theta = state_init[2]
+            
+            # set goal states
 
-        self.x_goal = observation_target[0]
-        self.y_goal = observation_target[1]
-        self.theta_goal = observation_target[2]
+            self.x_goal = observation_target[0]
+            self.y_goal = observation_target[1]
+            self.theta_goal = observation_target[2]
 
-        # set control gains
+            # set control gains
 
-        self.krho = 0.5
-        self.kalpha = 1.5
-        self.kbeta = -0.6
+            self.krho = 0.6
+            self.kalpha = 1.8
+            self.kbeta = -0.7
+
+            # set control boounds
+            self.ctrl_bnds = ctrl_bnds  
+
+            print("init n controller")
 
 
-    def wrap_angle(self, theta):
-        """
-        Wrap angle to the range [-pi, pi].
-        """
+        def wrap_angle(self, theta):
+            """
+            Wrap angle to the range [-pi, pi].
+            """
 
-        while theta <= -math.pi:
-            theta += 2 * math.pi
-        while theta > math.pi:
-            theta -= 2 * math.pi
-        return theta
+            while theta <= -math.pi:
+                theta += 2 * math.pi
+            while theta > math.pi:
+                theta -= 2 * math.pi
+            return theta
         
 
-    def compute_error(self, observation):
-        """
-        Compute the error between the current observation and the target observation.
-        """
+        def compute_error(self, observation):
+            """
+            Compute the error between the current observation and the target observation.
+            """
 
-        x = observation[0]
-        y = observation[1]
-        theta = observation[2]
+            x = observation[0]
+            y = observation[1]
+            theta = observation[2]
 
-        dx = self.x_goal - x
-        dy = self.y_goal - y
-        dtheta = self.wrap_angle(self.theta_goal - theta)
+            dx = self.x_goal - x
+            dy = self.y_goal - y
+            dtheta = self.wrap_angle(self.theta_goal - theta)
 
-        # compute the distance to the goal
+            # compute the distance to the goal
 
-        rho = math.sqrt(dx**2 + dy**2)
+            rho = math.sqrt(dx**2 + dy**2)
 
-        # compute the angle to the goal
+            # compute the angle to the goal
 
-        alpha = self.wrap_angle(math.atan2(dy, dx) - theta)
+            alpha = self.wrap_angle(math.atan2(dy, dx) - theta)
 
-        # compute the angle to the goal in the robot's frame
+            # compute the angle to the goal in the robot's frame
 
-        beta = self.wrap_angle(dtheta - alpha)
+            beta = self.wrap_angle(dtheta - alpha)
 
-        return rho, alpha, beta
-    
+            return rho, alpha, beta
+            
+        def compute_control(self, observation):
+            """
+            Compute the control action based on the error values.
+            """
+
+            rho, alpha, beta = self.compute_error(observation)
+
+            # compute the linear velocity and angular velocity
+            # control gains are set in the constructor
+
+            v = self.krho * rho
+            w = self.kalpha * alpha + self.kbeta * beta
+
+            # clip the controls to prevent drastic control efforts
+            v = np.clip(v, self.ctrl_bnds[0,0], self.ctrl_bnds[0,1])
+            w = np.clip(w, self.ctrl_bnds[1,0], self.ctrl_bnds[1,1])
+
+            return v, w
+
+
+        def pure_loop(self, observation):
+            # print("running pure loop")
+            
+            v, w = self.compute_control(observation)
+            # print(v, w)
+            return [v,w]
+
+class LQR:
+    def __init__(self,
+                 dim_state,
+                 dim_input,
+                 dim_output, 
+                 sampling_time=0.1,
+                 system = None,
+                 run_obj_pars = [],
+                 observation_target = [],
+                 state_init = [],
+                 ctrl_bnds = []
+    ):
+
+        # initialize dimension paramters
+        self.dim_state = dim_state
+        self.dim_input = dim_input
+        self.dim_output = dim_output
+        self.dt = sampling_time
         
-    def compute_control(self, observation):
+        
+        # initialize system
+        self.system = system
+
+        self.action_init = np.array([0, 0])
+        self.observation_target = observation_target
+
+        self.A = None
+
+        self.B = None
+
+        self.Q = run_obj_pars[:3, :3]
+
+        self.R = run_obj_pars[3:, 3:]
+
+        self.ctrl_bnds = ctrl_bnds
+
+        # Debugging
+ 
+        print("A", self.A)
+        
+        print("B", self.B)
+
+        print("Q", self.Q)
+        
+        print("R", self.R)
+
+        self.observation_target = observation_target
+
+
+    def _compute_gain(self):
         """
-        Compute the control action based on the error values.
+        Solve the Discrete-time Algebraic Riccati Equation and compute gain K.
+        
         """
 
-        rho, alpha, beta = self.compute_error(observation)
+        self.A, self.B = self.system._linearize_dyn(self.observation_target, self.action_init)
 
-        # compute the linear velocity and angular velocity
-        # control gains are set in the constructor
+        P = solve_discrete_are(self.A, self.B, self.Q, self.R)
 
-        v = self.krho * rho
-        w = self.kalpha * alpha + self.kbeta * beta
+        print("P", P)
 
-        return v, w
+        K = np.linalg.inv(self.B.T @ P @ self.B + self.R) @ (self.B.T @ P @ self.A)
+        
+        print("K", K)
+
+        return K
 
 
     def pure_loop(self, observation):
-
-        v, w = self.compute_control(observation)
-
-        return np.array([v, w])
-
-
-# class LQR:
+        """
+        Compute control input u = -Kx for given state x.
+        Returns control as 1D array [v, w].
+        """
+        K = self._compute_gain()
 
 
+        # Compute state error
+        dx = np.array(observation) - np.array(self.observation_target)
 
-# class MPC:
+        # Stop condition
+        if np.linalg.norm(dx[:2]) < 0.1 and abs(dx[2]) < 0.1:
+            return np.array([0.0, 0.0])
+        
+        # Control gain
+        u = -K @ observation.reshape(-1, 1)
+        u = u.flatten()
 
+        # Update model
+        # self.update_model(observation, u)
 
-
+        # clip the controls to prevent drastic controll efforts
+        # u[0] = np.clip(u[0], self.ctrl_bnds[0,0], self.ctrl_bnds[0,1])
+        # u[1] = np.clip(u[1], self.ctrl_bnds[1,0], self.ctrl_bnds[1,1])
+        
+        return np.array(u)
+    
 

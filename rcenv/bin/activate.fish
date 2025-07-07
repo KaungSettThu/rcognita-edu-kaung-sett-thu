@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV /home/kast/m-eng-robotics/adv-control/rcognita-edu-kaung-sett-thu/rcenv
+set -gx VIRTUAL_ENV /home/kast/m-eng-robotics/adv-control/rcognita-edu/rcenv
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"bin $PATH

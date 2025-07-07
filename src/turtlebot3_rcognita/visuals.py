@@ -6,11 +6,11 @@ Contains an interface class `animator` along with concrete realizations, each of
 import numpy as np
 import numpy.linalg as la
 
-from utilities import upd_line
-from utilities import reset_line
-from utilities import upd_scatter
-from utilities import upd_text
-from utilities import to_col_vec
+from .utilities import upd_line
+from .utilities import reset_line
+from .utilities import upd_scatter
+from .utilities import upd_text
+from .utilities import to_col_vec
 
 import matplotlib as mpl 
 import matplotlib.pyplot as plt
@@ -190,7 +190,7 @@ class Animator3WRobotNI(Animator):
         self.axs_ctrl = self.fig_sim.add_subplot(224, autoscale_on=False, xlim=(t0,t1), ylim=(1.1*np.min([v_min, omega_min]), 1.1*np.max([v_max, omega_max])), xlabel='t [s]')
         self.axs_ctrl.plot([t0, t1], [0, 0], 'k--', lw=0.75)   # Help line
         self.lines_ctrl = self.axs_ctrl.plot(t0, to_col_vec(action_init).T, lw=0.5)
-        self.axs_ctrl.legend(iter(self.lines_ctrl), ('v [m/s]', r'$\omega$ [rad/s]'), fancybox=True, loc='upper right')
+        self.axs_ctrl.legend(self.lines_ctrl, ('v [m/s]', r'$\omega$ [rad/s]'), fancybox=True, loc='upper right')
         
         # Pack all lines together
         cLines = namedtuple('lines', ['line_traj', 'line_norm', 'line_alpha', 'line_run_obj', 'line_accum_obj', 'lines_ctrl'])

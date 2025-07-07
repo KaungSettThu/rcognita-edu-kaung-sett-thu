@@ -1,4 +1,4 @@
-#!/home/kast/m-eng-robotics/adv-control/rcognita-edu-kaung-sett-thu/rcenv/bin/python3
+#!/home/kast/m-eng-robotics/adv-control/rcognita-edu/rcenv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

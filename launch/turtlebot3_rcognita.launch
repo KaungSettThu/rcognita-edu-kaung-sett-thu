@@ -1,0 +1,8 @@
+<launch>
+    <node 
+        name = "turtlebot3_rcognita"
+        pkg = "turtlebot3_rcognita"
+        type = "PRESET_turtlebot3.py"
+        output = "screen"
+    />
+</launch>

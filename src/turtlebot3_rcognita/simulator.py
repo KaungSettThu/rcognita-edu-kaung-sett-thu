@@ -11,7 +11,7 @@ The system can be of three types:
 import numpy as np
 import scipy as sp
 
-from utilities import rej_sampling_rvs
+from .utilities import rej_sampling_rvs
 
 class Simulator:
     """

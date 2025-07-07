@@ -10,14 +10,16 @@ import csv
 from datetime import datetime
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches 
 import numpy as np
 
-import systems
-import simulator
-import controllers
-import loggers
-import visuals
-from utilities import on_key_press
+import turtlebot3_rcognita.systems as systems
+import turtlebot3_rcognita.controllers
+from turtlebot3_rcognita import controllers
+import turtlebot3_rcognita.loggers as loggers
+import turtlebot3_rcognita.visuals as visuals
+import turtlebot3_rcognita.simulator as simulator
+from turtlebot3_rcognita.utilities import on_key_press
 
 import argparse
 
@@ -36,8 +38,9 @@ parser = argparse.ArgumentParser(description=description)
 
 parser.add_argument('--ctrl_mode', metavar='ctrl_mode', type=str,
                     choices=['MPC',
-                             "N_CTRL"],
-                    default='N_CTRL',
+                             "N_CTRL",
+                             'LQR'],
+                    default='MPC',
                     help='Control mode. Currently available: ' +
                     '----manual: manual constant control specified by action_manual; ' +
                     '----nominal: nominal controller, usually used to benchmark optimal controllers;' +                     
@@ -66,11 +69,9 @@ parser.add_argument('--is_print_sim_step', type=int,
 parser.add_argument('--action_manual', type=float,
                     default=[-5, -3], nargs='+',
                     help='Manual control action to be fed constant, system-specific!')
-# adjust this
 parser.add_argument('--Nactor', type=int,
                     default=6,
                     help='Horizon length (in steps) for predictive controllers.')
-
 parser.add_argument('--pred_step_size_multiplier', type=float,
                     default=5.0,
                     help='Size of each prediction step in seconds is a pred_step_size_multiplier multiple of controller sampling time dt.')
@@ -83,7 +84,10 @@ parser.add_argument('--run_obj_struct', type=str,
                              'biquadratic'],
                     help='Structure of running objective function.')
 parser.add_argument('--R1_diag', type=float, nargs='+',
-                    default=[100, 100, 10, 0, 0],
+                    #     Stable LQR R1
+                    # default=[2.5, 2.5, 20.0, 3.0, 2.0], 
+                #     Stable MPC R1
+                    default=[5.0, 10.0, 2.0, 2.0, 3.0],
                     help='Parameter of running objective function. Must have proper dimension. ' +
                     'Say, if chi = [observation, action], then a quadratic running objective reads chi.T diag(R1) chi, where diag() is transformation of a vector to a diagonal matrix.')
 parser.add_argument('--R2_diag', type=float, nargs='+',
@@ -133,8 +137,7 @@ parser.add_argument('--init_robot_pose_theta', type=float,
                     default=1.57,
                     help='Initial orientation angle (in radians) of the robot pose.')
 
-# adding goal coordinates
-
+# Goal coordinates
 parser.add_argument('--goal_robot_pose_x', type=float,
                     default=0.0,
                     help='Goal x-coordiante of the robot pose.')
@@ -232,15 +235,15 @@ ctrl_bnds=np.array([[v_min, v_max], [omega_min, omega_max]])
 
 #----------------------------------------Initialization : : system
 my_sys = systems.Sys3WRobotNI(sys_type="diff_eqn", 
-                                     dim_state=dim_state,
-                                     dim_input=dim_input,
-                                     dim_output=dim_output,
-                                     dim_disturb=dim_disturb,
-                                     pars=[],
-                                     ctrl_bnds=ctrl_bnds,
-                                     is_dyn_ctrl=is_dyn_ctrl,
-                                     is_disturb=is_disturb,
-                                     pars_disturb=[])
+                                    dim_state=dim_state,
+                                    dim_input=dim_input,
+                                    dim_output=dim_output,
+                                    dim_disturb=dim_disturb,
+                                    pars=[],
+                                    ctrl_bnds=ctrl_bnds,
+                                    is_dyn_ctrl=is_dyn_ctrl,
+                                    is_disturb=is_disturb,
+                                    pars_disturb=[])
 
 observation_init = my_sys.out(state_init)
 
@@ -252,52 +255,65 @@ alpha_deg_0 = alpha0/2/np.pi
 #----------------------------------------Initialization : : model
 
 #----------------------------------------Initialization : : controller
-my_ctrl_nominal = None 
+my_ctrl_nominal = controllers.N_CTRL(observation_target = state_goal,
+                                        ctrl_bnds = ctrl_bnds) 
+
+my_ctrl_lqr = controllers.LQR(dim_state,
+                                dim_input,
+                                dim_output,
+                                sampling_time = dt, 
+                                system = my_sys,
+                                run_obj_pars = np.array(R1),
+                                observation_target = state_goal,
+                                state_init = state_init,
+                                ctrl_bnds = ctrl_bnds)
 
 # Predictive optimal controller
-my_ctrl_opt_pred = controllers.ControllerOptimalPredictive(dim_input,
-                                           dim_output,
-                                           ctrl_mode,
-                                           ctrl_bnds = ctrl_bnds,
-                                           action_init = [],
-                                           t0 = t0,
-                                           sampling_time = dt,
-                                           Nactor = Nactor,
-                                           pred_step_size = pred_step_size,
-                                           sys_rhs = my_sys._state_dyn,
-                                           sys_out = my_sys.out,
-                                           state_sys = state_init,
-                                           buffer_size = buffer_size,
-                                           gamma = gamma,
-                                           Ncritic = Ncritic,
-                                           critic_period = critic_period,
-                                           critic_struct = critic_struct,
-                                           run_obj_struct = run_obj_struct,
-                                           run_obj_pars = [R1],
-                                           observation_target = state_goal,
-                                           state_init = state_init,
-                                           obstacle = [xdistortion_x, ydistortion_y,distortion_sigma],
-                                           seed=seed)
+my_ctrl_opt_pred = controllers.ControllerOptimalPredictive(dim_state,
+                                            dim_input,
+                                            dim_output,
+                                            ctrl_mode,
+                                            system = my_sys,
+                                            ctrl_bnds = ctrl_bnds,
+                                            action_init = [],
+                                            t0 = t0,
+                                            sampling_time = dt,
+                                            Nactor = Nactor,
+                                            pred_step_size = pred_step_size,
+                                            sys_rhs = my_sys._state_dyn,
+                                            sys_out = my_sys.out,
+                                            state_sys = state_init,
+                                            buffer_size = buffer_size,
+                                            gamma = gamma,
+                                            Ncritic = Ncritic,
+                                            critic_period = critic_period,
+                                            critic_struct = critic_struct,
+                                            run_obj_struct = run_obj_struct,
+                                            run_obj_pars = np.array(R1),
+                                            observation_target = state_goal,
+                                            state_init = state_init,
+                                            obstacle = [xdistortion_x, ydistortion_y,distortion_sigma],
+                                            seed = seed)
 
 
 my_ctrl_benchm = my_ctrl_opt_pred
     
 #----------------------------------------Initialization : : simulator
 my_simulator = simulator.Simulator(sys_type = "diff_eqn",
-                                   closed_loop_rhs = my_sys.closed_loop_rhs,
-                                   sys_out = my_sys.out,
-                                   state_init = state_init,
-                                   disturb_init = [],
-                                   action_init = action_init,
-                                   t0 = t0,
-                                   t1 = t1,
-                                   dt = dt,
-                                   max_step = dt,
-                                   first_step = 1e-4,
-                                   atol = atol,
-                                   rtol = rtol,
-                                   is_disturb = is_disturb,
-                                   is_dyn_ctrl = is_dyn_ctrl)
+                                    closed_loop_rhs = my_sys.closed_loop_rhs,
+                                    sys_out = my_sys.out,
+                                    state_init = state_init,
+                                    disturb_init = [],
+                                    action_init = action_init,
+                                    t0 = t0,
+                                    t1 = t1,
+                                    dt = dt,
+                                    max_step = dt,
+                                    first_step = 1e-4,
+                                    atol = atol,
+                                    rtol = rtol,
+                                    is_disturb = is_disturb,
+                                    is_dyn_ctrl = is_dyn_ctrl)
 
 #----------------------------------------Initialization : : logger
 date = datetime.now().strftime("%Y-%m-%d")
@@ -352,27 +368,67 @@ if is_visualization:
                                                      controllers.ctrl_selector,
                                                      my_logger),
                                             pars=(state_init,
-                                                  action_init,
-                                                  t0,
-                                                  t1,
-                                                  state_full_init,
-                                                  xMin,
-                                                  xMax,
-                                                  yMin,
-                                                  yMax,
-                                                  ctrl_mode,
-                                                  action_manual,
-                                                  v_min,
-                                                  omega_min,
-                                                  v_max,
-                                                  omega_max,
-                                                  Nruns,
-                                                  is_print_sim_step, is_log_data, 0, [], [xdistortion_x, ydistortion_y,distortion_sigma]))
+                                                    action_init,
+                                                    t0,
+                                                    t1,
+                                                    state_full_init,
+                                                    xMin,
+                                                    xMax,
+                                                    yMin,
+                                                    yMax,
+                                                    ctrl_mode,
+                                                    action_manual,
+                                                    v_min,
+                                                    omega_min,
+                                                    v_max,
+                                                    omega_max,
+                                                    Nruns,
+                                                    is_print_sim_step, is_log_data, 0, [], [xdistortion_x, ydistortion_y,distortion_sigma]))
 
     anm = animation.FuncAnimation(my_animator.fig_sim,
-                                  my_animator.animate,
-                                  init_func=my_animator.init_anim,
-                                  blit=False, interval=dt/1e6, repeat=False)
+                                    my_animator.animate,
+                                    init_func=my_animator.init_anim,
+                                    blit=False, interval=dt/1e6, repeat=False)
+    
+
+    """
+    Draw the penalty zone to test LQR response to penalty zone
+    """
+
+    # # Define penalty zone coordinates
+    # penalty_zone_x_min = -2.5
+    # penalty_zone_x_max = -1.5
+    # penalty_zone_y_min = -1.5
+    # penalty_zone_y_max = -0.5
+
+    # rect_width = penalty_zone_x_max - penalty_zone_x_min
+    # rect_height = penalty_zone_y_max - penalty_zone_y_min
+
+    # if my_animator.fig_sim.axes: 
+    #     main_ax = my_animator.fig_sim.axes[0] 
+    # else:
+    #     main_ax = plt.gca() 
+
+    # # Create the Rectangle patch
+    # penalty_rect = patches.Rectangle((penalty_zone_x_min, penalty_zone_y_min),
+    #                                 rect_width,
+    #                                 rect_height,
+    #                                 linewidth=1,
+    #                                 edgecolor='red',    # Red outline
+    #                                 facecolor='red',    # Red fill
+    #                                 alpha=0.2,          # Semi-transparent
+    #                                 zorder=0,           # Draw below the robot trajectory
+    #                                 label='Penalty Zone') # Label for legend
+
+    # # Add the patch to the axes
+    # main_ax.add_patch(penalty_rect)
+
+    # # Add a legend entry for the penalty zone
+    # main_ax.legend(handles=[penalty_rect], loc='upper left')
+
+
+    """"""
+
     print("ALSO GOOD")
     my_animator.get_anm(anm)
     
@@ -384,7 +440,9 @@ if is_visualization:
     
     plt.show()
     
-else:   
+else:
+    print("running robot")
+
     run_curr = 1
     datafile = datafiles[0]
     
@@ -403,12 +461,20 @@ else:
         xCoord = state_full[0]
         yCoord = state_full[1]
         alpha = state_full[2]
+
+        linear_vel = action[0]
+        angular_vel = action[1]
         
+        # Debugging
+        print(f"x: {xCoord} y: {yCoord} theta: {alpha}")
+        print(f"action - v: {linear_vel} w: {angular_vel}")
+        print("")
+
         run_obj = my_ctrl_benchm.run_obj(observation, action)
         accum_obj = my_ctrl_benchm.accum_obj_val
         
-        count_CALF = my_ctrl_benchm.D_count()
-        count_N_CTRL = my_ctrl_benchm.get_N_CTRL_count()
+        # count_CALF = my_ctrl_benchm.D_count()
+        # count_N_CTRL = my_ctrl_benchm.get_N_CTRL_count()
 
         if is_print_sim_step:
             my_logger.print_sim_step(t, xCoord, yCoord, alpha, run_obj, accum_obj, action)
